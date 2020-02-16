@@ -209,6 +209,21 @@ func isCreated(pod *v1.Pod) bool {
 	return pod.Status.Phase != ""
 }
 
+// isSafeOutdatedPending returns true if a pod in a stateful set is outdated
+// but not yet deployed, and is safe to delete/replace with the new spec
+// We can detect this by checking all of:
+// 1) The pod is in a pending state
+// 2) The pod is at a different revision than the update revision
+// 3) None of the pods init/main containers have started running yet
+func isSafeOutdatedPending(set *apps.StatefulSet, pod *v1.Pod, currentRevision, updateRevision *apps.ControllerRevision) bool {
+	return pod.Status.Phase == v1.PodPending &&
+		getPodRevision(pod) != updateRevision.Name
+	// TODO: Safe bit!
+	// set.Spec.UpdateStrategy.Type == apps.RollingUpdateStatefulSetStrategyType &&
+	// set.Spec.UpdateStrategy.RollingUpdate.Partition != nil &&
+	// getOrdinal(pod) >= int(*set.Spec.UpdateStrategy.RollingUpdate.Partition)
+}
+
 // isFailed returns true if pod has a Phase of PodFailed
 func isFailed(pod *v1.Pod) bool {
 	return pod.Status.Phase == v1.PodFailed

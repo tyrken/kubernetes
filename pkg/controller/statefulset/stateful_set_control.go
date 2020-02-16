@@ -369,10 +369,10 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 
 	// Examine each replica with respect to its ordinal
 	for i := range replicas {
-		// delete and recreate failed pods
-		if isFailed(replicas[i]) {
-			ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingFailedPod",
-				"StatefulSet %s/%s is recreating failed Pod %s",
+		// delete and recreate failed or outdated pending (and safe to delete) pods
+		if isFailed(replicas[i]) || isSafeOutdatedPending(set, replicas[i], currentRevision, updateRevision) {
+			ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingFailedOrPendingPod",
+				"StatefulSet %s/%s is recreating failed/pending Pod %s",
 				set.Namespace,
 				set.Name,
 				replicas[i].Name)
