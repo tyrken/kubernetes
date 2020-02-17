@@ -23,7 +23,7 @@ import (
 	"k8s.io/klog"
 
 	apps "k8s.io/api/apps/v1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/kubernetes/pkg/controller/history"
@@ -370,12 +370,30 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	// Examine each replica with respect to its ordinal
 	for i := range replicas {
 		// delete and recreate failed or outdated pending (and safe to delete) pods
-		if isFailed(replicas[i]) || isSafeOutdatedPending(set, replicas[i], currentRevision, updateRevision) {
-			ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingFailedOrPendingPod",
-				"StatefulSet %s/%s is recreating failed/pending Pod %s",
+		toDelete := isFailed(replicas[i])
+		if toDelete {
+			ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingFailedPod",
+				"StatefulSet %s/%s is recreating failed Pod %s",
 				set.Namespace,
 				set.Name,
 				replicas[i].Name)
+		} else if isOutdatedPending(replicas[i], updateRevision) && !stayCurrentSideOfPartition(set, getOrdinal(replicas[i])) {
+			toDelete := isSafeToDeletePendingPod(replicas[i])
+			if toDelete {
+				ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingPendingPod",
+					"StatefulSet %s/%s is recreating outdated pending Pod %s",
+					set.Namespace,
+					set.Name,
+					replicas[i].Name)
+			} else {
+				ssc.recorder.Eventf(set, v1.EventTypeWarning, "BlockedOnPendingPod",
+					"StatefulSet %s/%s is would update pending Pod %s, but blocked as its partially running - delete pod manually",
+					set.Namespace,
+					set.Name,
+					replicas[i].Name)
+			}
+		}
+		if toDelete {
 			if err := ssc.podControl.DeleteStatefulPod(set, replicas[i]); err != nil {
 				return &status, err
 			}

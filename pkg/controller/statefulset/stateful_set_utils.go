@@ -24,7 +24,7 @@ import (
 	"strconv"
 
 	apps "k8s.io/api/apps/v1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
@@ -209,21 +209,6 @@ func isCreated(pod *v1.Pod) bool {
 	return pod.Status.Phase != ""
 }
 
-// isSafeOutdatedPending returns true if a pod in a stateful set is outdated
-// but not yet deployed, and is safe to delete/replace with the new spec
-// We can detect this by checking all of:
-// 1) The pod is in a pending state
-// 2) The pod is at a different revision than the update revision
-// 3) None of the pods init/main containers have started running yet
-func isSafeOutdatedPending(set *apps.StatefulSet, pod *v1.Pod, currentRevision, updateRevision *apps.ControllerRevision) bool {
-	return pod.Status.Phase == v1.PodPending &&
-		getPodRevision(pod) != updateRevision.Name
-	// TODO: Safe bit!
-	// set.Spec.UpdateStrategy.Type == apps.RollingUpdateStatefulSetStrategyType &&
-	// set.Spec.UpdateStrategy.RollingUpdate.Partition != nil &&
-	// getOrdinal(pod) >= int(*set.Spec.UpdateStrategy.RollingUpdate.Partition)
-}
-
 // isFailed returns true if pod has a Phase of PodFailed
 func isFailed(pod *v1.Pod) bool {
 	return pod.Status.Phase == v1.PodFailed
@@ -261,6 +246,23 @@ func getPodRevision(pod *v1.Pod) string {
 	return pod.Labels[apps.StatefulSetRevisionLabel]
 }
 
+// isOutdatedPending returns true if a pod in a stateful set is pending and not equal to the update revision
+func isOutdatedPending(pod *v1.Pod, updateRevision *apps.ControllerRevision) bool {
+	return pod.Status.Phase == v1.PodPending &&
+		getPodRevision(pod) != updateRevision.Name
+}
+
+// isSafeToDeletePendingPod returns true if none of the pods containers have started running yet
+// 1) Check all states at Waiting
+// 2) restartCount == 0
+func isSafeToDeletePendingPod(pod *v1.Pod) bool {
+	// TODO: Complete!
+	println("isSafeToDeletePendingPod:" + pod.Name)
+	fmt.Printf("%+v\n", pod.Status)
+	println("isSafeToDeletePendingPod ---")
+	return pod.Status.Phase == v1.PodPending
+}
+
 // newStatefulSetPod returns a new Pod conforming to the set's Spec with an identity generated from ordinal.
 func newStatefulSetPod(set *apps.StatefulSet, ordinal int) *v1.Pod {
 	pod, _ := controller.GetPodFromTemplate(&set.Spec.Template, set, metav1.NewControllerRef(set, controllerKind))
@@ -270,14 +272,19 @@ func newStatefulSetPod(set *apps.StatefulSet, ordinal int) *v1.Pod {
 	return pod
 }
 
+// stayCurrentSideOfPartition decides if a given pod ordinal is in the set of pods that should be at kept the Current Revsion
+func stayCurrentSideOfPartition(currentSet *apps.StatefulSet, ordinal int) bool {
+	return currentSet.Spec.UpdateStrategy.Type == apps.RollingUpdateStatefulSetStrategyType &&
+		(currentSet.Spec.UpdateStrategy.RollingUpdate == nil && ordinal < int(currentSet.Status.CurrentReplicas)) ||
+		(currentSet.Spec.UpdateStrategy.RollingUpdate != nil && ordinal < int(*currentSet.Spec.UpdateStrategy.RollingUpdate.Partition))
+}
+
 // newVersionedStatefulSetPod creates a new Pod for a StatefulSet. currentSet is the representation of the set at the
 // current revision. updateSet is the representation of the set at the updateRevision. currentRevision is the name of
 // the current revision. updateRevision is the name of the update revision. ordinal is the ordinal of the Pod. If the
 // returned error is nil, the returned Pod is valid.
 func newVersionedStatefulSetPod(currentSet, updateSet *apps.StatefulSet, currentRevision, updateRevision string, ordinal int) *v1.Pod {
-	if currentSet.Spec.UpdateStrategy.Type == apps.RollingUpdateStatefulSetStrategyType &&
-		(currentSet.Spec.UpdateStrategy.RollingUpdate == nil && ordinal < int(currentSet.Status.CurrentReplicas)) ||
-		(currentSet.Spec.UpdateStrategy.RollingUpdate != nil && ordinal < int(*currentSet.Spec.UpdateStrategy.RollingUpdate.Partition)) {
+	if stayCurrentSideOfPartition(currentSet, ordinal) {
 		pod := newStatefulSetPod(currentSet, ordinal)
 		setPodRevision(pod, currentRevision)
 		return pod
