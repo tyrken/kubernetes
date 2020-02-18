@@ -261,6 +261,17 @@ func isSafeToDeletePendingPod(pod *v1.Pod) bool {
 	fmt.Printf("%+v\n", pod.Status)
 	println("isSafeToDeletePendingPod ---")
 	return pod.Status.Phase == v1.PodPending
+	// for _, containerStatus := range pod.Status.InitContainerStatuses {
+	// 	if containerStatus.State.Waiting == nil || containerStatus.RestartCount > 0 {
+	// 		return false
+	// 	}
+	// }
+	// for _, containerStatus := range pod.Status.ContainerStatuses {
+	// 	if containerStatus.State.Waiting == nil || containerStatus.RestartCount > 0 {
+	// 		return false
+	// 	}
+	// }
+	// return true
 }
 
 // newStatefulSetPod returns a new Pod conforming to the set's Spec with an identity generated from ordinal.
@@ -284,11 +295,14 @@ func stayCurrentSideOfPartition(currentSet *apps.StatefulSet, ordinal int) bool 
 // the current revision. updateRevision is the name of the update revision. ordinal is the ordinal of the Pod. If the
 // returned error is nil, the returned Pod is valid.
 func newVersionedStatefulSetPod(currentSet, updateSet *apps.StatefulSet, currentRevision, updateRevision string, ordinal int) *v1.Pod {
+	fmt.Printf("nVSSP - repl %d ord %d- %+v\n", currentSet.Status.CurrentReplicas, ordinal, currentSet.Spec.UpdateStrategy)
 	if stayCurrentSideOfPartition(currentSet, ordinal) {
+		println("New current pod")
 		pod := newStatefulSetPod(currentSet, ordinal)
 		setPodRevision(pod, currentRevision)
 		return pod
 	}
+	println("New update pod")
 	pod := newStatefulSetPod(updateSet, ordinal)
 	setPodRevision(pod, updateRevision)
 	return pod

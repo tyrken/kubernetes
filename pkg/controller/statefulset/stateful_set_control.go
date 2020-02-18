@@ -17,6 +17,7 @@ limitations under the License.
 package statefulset
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
@@ -378,7 +379,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 				set.Name,
 				replicas[i].Name)
 		} else if isOutdatedPending(replicas[i], updateRevision) && !stayCurrentSideOfPartition(set, getOrdinal(replicas[i])) {
-			toDelete := isSafeToDeletePendingPod(replicas[i])
+			toDelete = isSafeToDeletePendingPod(replicas[i])
 			if toDelete {
 				ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingPendingPod",
 					"StatefulSet %s/%s is recreating outdated pending Pod %s",
@@ -394,7 +395,9 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 			}
 		}
 		if toDelete {
+			fmt.Printf("Will Delete %s!\n", replicas[i].Name)
 			if err := ssc.podControl.DeleteStatefulPod(set, replicas[i]); err != nil {
+				println("Failed Delete %+v!", err)
 				return &status, err
 			}
 			if getPodRevision(replicas[i]) == currentRevision.Name {
@@ -404,6 +407,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 				status.UpdatedReplicas--
 			}
 			status.Replicas--
+			fmt.Printf("MakeNew ord %d\n", i)
 			replicas[i] = newVersionedStatefulSetPod(
 				currentSet,
 				updateSet,
@@ -413,6 +417,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 		}
 		// If we find a Pod that has not been created we create the Pod
 		if !isCreated(replicas[i]) {
+			fmt.Printf("Will Create %s!\n", replicas[i].Name)
 			if err := ssc.podControl.CreateStatefulPod(set, replicas[i]); err != nil {
 				return &status, err
 			}
@@ -426,6 +431,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 
 			// if the set does not allow bursting, return immediately
 			if monotonic {
+				println("Return after create")
 				return &status, nil
 			}
 			// pod created, no more work possible for this round
