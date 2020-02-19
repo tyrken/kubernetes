@@ -253,25 +253,29 @@ func isOutdatedPending(pod *v1.Pod, updateRevision *apps.ControllerRevision) boo
 }
 
 // isSafeToDeletePendingPod returns true if none of the pods containers have started running yet
-// 1) Check all states at Waiting
+// 1) Check all states not Running or Terminated-after-really-starting
 // 2) restartCount == 0
 func isSafeToDeletePendingPod(pod *v1.Pod) bool {
-	// TODO: Complete!
 	println("isSafeToDeletePendingPod:" + pod.Name)
 	fmt.Printf("%+v\n", pod.Status)
-	println("isSafeToDeletePendingPod ---")
-	return pod.Status.Phase == v1.PodPending
-	// for _, containerStatus := range pod.Status.InitContainerStatuses {
-	// 	if containerStatus.State.Waiting == nil || containerStatus.RestartCount > 0 {
-	// 		return false
-	// 	}
-	// }
-	// for _, containerStatus := range pod.Status.ContainerStatuses {
-	// 	if containerStatus.State.Waiting == nil || containerStatus.RestartCount > 0 {
-	// 		return false
-	// 	}
-	// }
-	// return true
+	if pod.Status.Phase != v1.PodPending {
+		println("isSafeToDeletePendingPod - not Pending")
+		return false
+	}
+	for _, ics := range pod.Status.InitContainerStatuses {
+		if ics.State.Running != nil || (ics.State.Terminated != nil && !ics.State.Terminated.StartedAt.IsZero()) || ics.RestartCount > 0 {
+			println("isSafeToDeletePendingPod - ics running")
+			return false
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Running != nil || (cs.State.Terminated != nil && !cs.State.Terminated.StartedAt.IsZero()) || cs.RestartCount > 0 {
+			println("isSafeToDeletePendingPod - cs running")
+			return false
+		}
+	}
+	println("isSafeToDeletePendingPod +++")
+	return true
 }
 
 // newStatefulSetPod returns a new Pod conforming to the set's Spec with an identity generated from ordinal.

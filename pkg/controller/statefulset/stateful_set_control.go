@@ -388,7 +388,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 					replicas[i].Name)
 			} else {
 				ssc.recorder.Eventf(set, v1.EventTypeWarning, "BlockedOnPendingPod",
-					"StatefulSet %s/%s is would update pending Pod %s, but blocked as its partially running - delete pod manually",
+					"StatefulSet %s/%s would recreate Pod %s, but blocked as it's partially running - delete pod manually",
 					set.Namespace,
 					set.Name,
 					replicas[i].Name)
@@ -407,6 +407,11 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 				status.UpdatedReplicas--
 			}
 			status.Replicas--
+			// if the set does not allow bursting, return immediately
+			if monotonic {
+				println("Return after delete")
+				return &status, nil
+			}
 			fmt.Printf("MakeNew ord %d\n", i)
 			replicas[i] = newVersionedStatefulSetPod(
 				currentSet,

@@ -163,6 +163,7 @@ require (
 	k8s.io/metrics v0.0.0
 	k8s.io/repo-infra v0.0.1-alpha.1
 	k8s.io/sample-apiserver v0.0.0
+	k8s.io/sample-controller v0.0.0-00010101000000-000000000000 // indirect
 	k8s.io/system-validators v1.0.4
 	k8s.io/utils v0.0.0-20200117235808-5f6fbceb4c31
 	sigs.k8s.io/kustomize v2.0.3+incompatible
