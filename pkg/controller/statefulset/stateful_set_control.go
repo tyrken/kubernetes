@@ -372,25 +372,19 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	for i := range replicas {
 		// delete and recreate failed or outdated pending (and safe to delete) pods
 		toDelete := isFailed(replicas[i])
+		wasPending := false
 		if toDelete {
 			ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingFailedPod",
-				"StatefulSet %s/%s is recreating failed Pod %s",
-				set.Namespace,
-				set.Name,
-				replicas[i].Name)
+				"Recreating failed Pod %s", replicas[i].Name)
 		} else if isOutdatedPending(replicas[i], updateRevision) && !stayCurrentSideOfPartition(set, getOrdinal(replicas[i])) {
 			toDelete = isSafeToDeletePendingPod(replicas[i])
+			wasPending = true
 			if toDelete {
 				ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingPendingPod",
-					"StatefulSet %s/%s is recreating outdated pending Pod %s",
-					set.Namespace,
-					set.Name,
-					replicas[i].Name)
+					"Recreating outdated pending Pod %s", replicas[i].Name)
 			} else {
 				ssc.recorder.Eventf(set, v1.EventTypeWarning, "BlockedOnPendingPod",
-					"StatefulSet %s/%s would recreate Pod %s, but blocked as it's partially running - delete pod manually",
-					set.Namespace,
-					set.Name,
+					"Pod %s partially started, blocking auto-update: delete manually",
 					replicas[i].Name)
 			}
 		}
@@ -407,11 +401,6 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 				status.UpdatedReplicas--
 			}
 			status.Replicas--
-			// if the set does not allow bursting, return immediately
-			if monotonic {
-				println("Return after delete")
-				return &status, nil
-			}
 			fmt.Printf("MakeNew ord %d\n", i)
 			replicas[i] = newVersionedStatefulSetPod(
 				currentSet,
@@ -419,6 +408,15 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 				currentRevision.Name,
 				updateRevision.Name,
 				i)
+			if wasPending {
+				// if the set does not allow bursting, return immediately after doing something (delete pending)
+				if monotonic {
+					println("Return after delete")
+					return &status, nil
+				}
+				// takes time to delete a non-failed pod - skip immediate recreate to avoid error
+				continue
+			}
 		}
 		// If we find a Pod that has not been created we create the Pod
 		if !isCreated(replicas[i]) {

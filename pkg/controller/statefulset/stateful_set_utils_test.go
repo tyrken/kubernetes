@@ -30,7 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	apps "k8s.io/api/apps/v1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/kubernetes/pkg/controller/history"
 )
@@ -194,6 +194,88 @@ func TestIsRunningAndReady(t *testing.T) {
 	podutil.UpdatePodCondition(&pod.Status, &condition)
 	if !isRunningAndReady(pod) {
 		t.Error("Pod should be running and ready")
+	}
+}
+
+func TestIsOutdatedPending(t *testing.T) {
+	set := newStatefulSet(1)
+	set.Status.CollisionCount = new(int32)
+	currentRevision, err := newRevision(set, 1, set.Status.CollisionCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pod := newStatefulSetPod(set, 1)
+	pod.Status = v1.PodStatus{
+		Phase: v1.PodPending,
+	}
+	setPodRevision(pod, currentRevision.Name)
+
+	if isOutdatedPending(pod, currentRevision) {
+		t.Error("Pending pod shouldn't be outdated compared to it's own currentRevision")
+	}
+
+	set.Spec.Template.Spec.Containers[0].Env = []v1.EnvVar{{Name: "foof", Value: "bar"}}
+	updateRevision, err := newRevision(set, 2, set.Status.CollisionCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !isOutdatedPending(pod, updateRevision) {
+		t.Error("Pending pod should be outdated compared to updated revision")
+	}
+
+	pod.Status = v1.PodStatus{
+		Phase: v1.PodRunning,
+	}
+
+	if isOutdatedPending(pod, updateRevision) {
+		t.Error("Running pod out of scope of isOutdatedPending")
+	}
+}
+
+func TestIsSafeToDeletePendingPod(t *testing.T) {
+	set := newStatefulSet(1)
+	pod := newStatefulSetPod(set, 1)
+	pod.Status = v1.PodStatus{
+		Phase: v1.PodPending,
+	}
+	if !isSafeToDeletePendingPod(pod) {
+		t.Error("Unstarted Pending pod should be safe to delete")
+	}
+
+	pod.Status.InitContainerStatuses = []v1.ContainerStatus{
+		{State: v1.ContainerState{Waiting: &v1.ContainerStateWaiting{}}, RestartCount: 0}}
+	if !isSafeToDeletePendingPod(pod) {
+		t.Error("Waiting Pending pod should be safe to delete")
+	}
+
+	pod.Status.InitContainerStatuses[0].RestartCount = 1
+	if isSafeToDeletePendingPod(pod) {
+		t.Error("Second go at init container is not safe to delete")
+	}
+	pod.Status.InitContainerStatuses[0].RestartCount = 0
+
+	pod.Status.InitContainerStatuses[0].State = v1.ContainerState{Running: &v1.ContainerStateRunning{}}
+	if isSafeToDeletePendingPod(pod) {
+		t.Error("Running init container is not safe to delete")
+	}
+
+	pod.Status.InitContainerStatuses[0].State = v1.ContainerState{Terminated: &v1.ContainerStateTerminated{}}
+	if !isSafeToDeletePendingPod(pod) {
+		t.Error("Never-started terminated init container should be safe to delete")
+	}
+
+	pod.Status.InitContainerStatuses[0].State.Terminated.StartedAt = metav1.NewTime(time.Now())
+	if isSafeToDeletePendingPod(pod) {
+		t.Error("Started terminated init container is not safe to delete")
+	}
+
+	pod.Status = v1.PodStatus{
+		Phase: v1.PodRunning,
+	}
+	if isSafeToDeletePendingPod(pod) {
+		t.Error("Running pod is not Pending!")
 	}
 }
 
