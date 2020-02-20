@@ -34,6 +34,8 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	clientset "k8s.io/client-go/kubernetes"
 	watchtools "k8s.io/client-go/tools/watch"
+	"k8s.io/kubernetes/pkg/apis/apps"
+	"k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
@@ -867,6 +869,213 @@ var _ = SIGDescribe("StatefulSet", func() {
 			appTester.run()
 		})
 	})
+
+	framework.KubeDescribe("When stuck with invalid image", func() {
+		ssName := "ss"
+		labels := map[string]string{
+			"foo": "bar",
+			"baz": "blah",
+		}
+		headlessSvcName := "test"
+		var ss *apps.StatefulSet
+
+		ginkgo.BeforeEach(func() {
+			ginkgo.By("Creating service " + headlessSvcName + " in namespace " + ns)
+			headlessService := framework.CreateServiceSpec(headlessSvcName, "", true, labels)
+			_, err := c.CoreV1().Services(ns).Create(headlessService)
+			framework.ExpectNoError(err)
+		})
+
+		ginkgo.AfterEach(func() {
+			if ginkgo.CurrentGinkgoTestDescription().Failed {
+				framework.DumpDebugInfo(c, ns)
+			}
+			e2elog.Logf("Deleting all statefulset in ns %v", ns)
+			framework.DeleteAllStatefulSets(c, ns)
+		})
+
+		ginkgo.It("should redeploy after update", func() {
+			ss = &apps.StatefulSet{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "StatefulSet",
+					APIVersion: "apps/v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      ssName,
+					Namespace: ns,
+				},
+				Spec: apps.StatefulSetSpec{
+					Selector: &metav1.LabelSelector{
+						MatchLabels: labels,
+					},
+					Template: core.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels:      labels,
+							Annotations: map[string]string{},
+						},
+						Spec: v1.PodSpec{
+							Containers: []v1.Container{
+								{
+									Name:    "busybox",
+									Image:   "busybox:never.exists",
+									Command: []string{"sh", "-c"},
+									Args:    []string{`while true; do echo "hello world"; sleep 5; done`},
+								},
+							},
+						},
+					},
+					ServiceName: headlessSvcName,
+				},
+			}
+
+			ginkgo.By("Creating statefulset " + ssName + " in namespace " + ns)
+			framework.SkipIfNoDefaultStorageClass(c)
+			*(ss.Spec.Replicas) = 1
+			sst := framework.NewStatefulSetTester(c)
+
+			_, err := c.AppsV1().StatefulSets(ns).Create(ss)
+			framework.ExpectNoError(err)
+
+			ginkgo.By(fmt.Sprintf("Updating stateful set template: fix image spec"))
+			ss, err = framework.UpdateStatefulSetWithRetries(c, ns, ss.Name, func(update *apps.StatefulSet) {
+				update.Spec.Template.Spec.Containers = []v1.Container{
+					{
+						Name:    "busybox",
+						Image:   "busybox",
+						Command: []string{"sh", "-c"},
+						Args:    []string{`while true; do echo "hello world"; sleep 5; done`},
+					},
+				}
+			})
+			framework.ExpectNoError(err)
+			sst.WaitForRunningAndReady(1, ss)
+		})
+	})
+
+	// framework.KubeDescribe("When stuck at failing init container", func() {
+	// 	ssName := "ss"
+	// 	labels := map[string]string{
+	// 		"foo": "bar",
+	// 		"baz": "blah",
+	// 	}
+	// 	headlessSvcName := "test"
+	// 	var ss *apps.StatefulSet
+
+	// 	ginkgo.BeforeEach(func() {
+	// 		ginkgo.By("Creating service " + headlessSvcName + " in namespace " + ns)
+	// 		headlessService := framework.CreateServiceSpec(headlessSvcName, "", true, labels)
+	// 		_, err := c.CoreV1().Services(ns).Create(headlessService)
+	// 		framework.ExpectNoError(err)
+	// 	})
+
+	// 	ginkgo.AfterEach(func() {
+	// 		if ginkgo.CurrentGinkgoTestDescription().Failed {
+	// 			framework.DumpDebugInfo(c, ns)
+	// 		}
+	// 		e2elog.Logf("Deleting all statefulset in ns %v", ns)
+	// 		framework.DeleteAllStatefulSets(c, ns)
+	// 	})
+
+	// 	ginkgo.It("should signal BlockedOnPendingPod", func() {
+	// 		ss = &apps.StatefulSet{
+	// 			TypeMeta: metav1.TypeMeta{
+	// 				Kind:       "StatefulSet",
+	// 				APIVersion: "apps/v1",
+	// 			},
+	// 			ObjectMeta: metav1.ObjectMeta{
+	// 				Name:      ssName,
+	// 				Namespace: ns,
+	// 			},
+	// 			Spec: apps.StatefulSetSpec{
+	// 				Selector: &metav1.LabelSelector{
+	// 					MatchLabels: labels,
+	// 				},
+	// 				Template: v1.PodTemplateSpec{
+	// 					ObjectMeta: metav1.ObjectMeta{
+	// 						Labels:      labels,
+	// 						Annotations: map[string]string{},
+	// 					},
+	// 					Spec: v1.PodSpec{
+	// 						InitContainers: []v1.Container{
+	// 							{
+	// 								Name:    "busybox",
+	// 								Image:   "busybox",
+	// 								Command: []string{"sh", "-c"},
+	// 								Args:    []string{"false"},
+	// 							},
+	// 						},
+	// 						Containers: []v1.Container{
+	// 							{
+	// 								Name:    "busybox",
+	// 								Image:   "busybox",
+	// 								Command: []string{"sh", "-c"},
+	// 								Args:    []string{`while true; do echo "hello world"; sleep 5; done`},
+	// 							},
+	// 						},
+	// 					},
+	// 				},
+	// 				ServiceName: headlessSvcName,
+	// 			},
+	// 		}
+
+	// 		ginkgo.By("Creating statefulset " + ssName + " in namespace " + ns)
+	// 		framework.SkipIfNoDefaultStorageClass(c)
+	// 		*(ss.Spec.Replicas) = 1
+	// 		sst := framework.NewStatefulSetTester(c)
+
+	// 		_, err := c.AppsV1().StatefulSets(ns).Create(ss)
+	// 		framework.ExpectNoError(err)
+
+	// 		ginkgo.By(fmt.Sprintf("Updating stateful set template: update init container"))
+	// 		ss, err = framework.UpdateStatefulSetWithRetries(c, ns, ss.Name, func(update *apps.StatefulSet) {
+	// 			update.Spec.Template.Spec.InitContainers = []v1.Container{
+	// 				{
+	// 					Name:    "busybox",
+	// 					Image:   "busybox",
+	// 					Command: []string{"sh", "-c"},
+	// 					Args:    []string{"true"},
+	// 				},
+	// 			}
+	// 		})
+	// 		framework.ExpectNoError(err)
+	// 		e2esset.WaitForState(c, set, func(set2 *appsv1.StatefulSet, pods2 *v1.PodList) (bool, error) {
+	// 			set = set2
+	// 			pods = pods2
+	// 			partition := int(*set.Spec.UpdateStrategy.RollingUpdate.Partition)
+	// 			if len(pods.Items) < int(*set.Spec.Replicas) {
+	// 				return false, nil
+	// 			}
+	// 			if partition <= 0 && set.Status.UpdateRevision != set.Status.CurrentRevision {
+	// 				framework.Logf("Waiting for StatefulSet %s/%s to complete update",
+	// 					set.Namespace,
+	// 					set.Name,
+	// 				)
+	// 				e2esset.SortStatefulPods(pods)
+	// 				for i := range pods.Items {
+	// 					if pods.Items[i].Labels[appsv1.StatefulSetRevisionLabel] != set.Status.UpdateRevision {
+	// 						framework.Logf("Waiting for Pod %s/%s to have revision %s update revision %s",
+	// 							pods.Items[i].Namespace,
+	// 							pods.Items[i].Name,
+	// 							set.Status.UpdateRevision,
+	// 							pods.Items[i].Labels[appsv1.StatefulSetRevisionLabel])
+	// 					}
+	// 				}
+	// 				return false, nil
+	// 			}
+	// 			for i := int(*set.Spec.Replicas) - 1; i >= partition; i-- {
+	// 				if pods.Items[i].Labels[appsv1.StatefulSetRevisionLabel] != set.Status.UpdateRevision {
+	// 					framework.Logf("Waiting for Pod %s/%s to have revision %s update revision %s",
+	// 						pods.Items[i].Namespace,
+	// 						pods.Items[i].Name,
+	// 						set.Status.UpdateRevision,
+	// 						pods.Items[i].Labels[appsv1.StatefulSetRevisionLabel])
+	// 					return false, nil
+	// 				}
+	// 			}
+	// 			return true, nil
+	// 		})
+	// 	})
+	// })
 })
 
 func kubectlExecWithRetries(ns string, args ...string) (out string) {
