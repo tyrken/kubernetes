@@ -248,8 +248,11 @@ func getPodRevision(pod *v1.Pod) string {
 
 // isOutdatedPending returns true if a pod in a stateful set is pending and not equal to the update revision
 func isOutdatedPending(pod *v1.Pod, updateRevision *apps.ControllerRevision) bool {
-	return pod.Status.Phase == v1.PodPending &&
+	rv := pod.Status.Phase == v1.PodPending &&
 		getPodRevision(pod) != updateRevision.Name
+	fmt.Printf("isOutdatedPending %t u:%s p:%s %+v\n", rv,
+		updateRevision.Name, pod.Labels[apps.StatefulSetRevisionLabel], pod.Status)
+	return rv
 }
 
 // isSafeToDeletePendingPod returns true if none of the pods containers have started running yet
@@ -288,10 +291,13 @@ func newStatefulSetPod(set *apps.StatefulSet, ordinal int) *v1.Pod {
 }
 
 // stayCurrentSideOfPartition decides if a given pod ordinal is in the set of pods that should be at kept the Current Revsion
-func stayCurrentSideOfPartition(currentSet *apps.StatefulSet, ordinal int) bool {
-	return currentSet.Spec.UpdateStrategy.Type == apps.RollingUpdateStatefulSetStrategyType &&
-		(currentSet.Spec.UpdateStrategy.RollingUpdate == nil && ordinal < int(currentSet.Status.CurrentReplicas)) ||
-		(currentSet.Spec.UpdateStrategy.RollingUpdate != nil && ordinal < int(*currentSet.Spec.UpdateStrategy.RollingUpdate.Partition))
+func stayCurrentSideOfPartition(set *apps.StatefulSet, ordinal, highestCurrentOrdinal int) bool {
+	rv := set.Spec.UpdateStrategy.Type == apps.RollingUpdateStatefulSetStrategyType &&
+		((set.Spec.UpdateStrategy.RollingUpdate == nil && ordinal < highestCurrentOrdinal) ||
+			(set.Spec.UpdateStrategy.RollingUpdate != nil && ordinal < int(*set.Spec.UpdateStrategy.RollingUpdate.Partition)))
+	fmt.Printf("stayCurrentSideOfPartition: %t (%d, %d) from %+v\n", rv,
+		ordinal, highestCurrentOrdinal, set.Spec.UpdateStrategy.RollingUpdate)
+	return rv
 }
 
 // newVersionedStatefulSetPod creates a new Pod for a StatefulSet. currentSet is the representation of the set at the

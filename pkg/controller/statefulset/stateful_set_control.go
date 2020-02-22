@@ -284,6 +284,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	condemned := make([]*v1.Pod, 0, len(pods))
 	unhealthy := 0
 	firstUnhealthyOrdinal := math.MaxInt32
+	highestCurrentOrdinal := -1
 	var firstUnhealthyPod *v1.Pod
 
 	// First we partition pods into two lists valid replicas and condemned Pods
@@ -295,17 +296,22 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 			status.ReadyReplicas++
 		}
 
+		ord := getOrdinal(pods[i])
+
 		// count the number of current and update replicas
 		if isCreated(pods[i]) && !isTerminating(pods[i]) {
 			if getPodRevision(pods[i]) == currentRevision.Name {
 				status.CurrentReplicas++
+				if ord > highestCurrentOrdinal {
+					highestCurrentOrdinal = ord
+				}
 			}
 			if getPodRevision(pods[i]) == updateRevision.Name {
 				status.UpdatedReplicas++
 			}
 		}
 
-		if ord := getOrdinal(pods[i]); 0 <= ord && ord < replicaCount {
+		if 0 <= ord && ord < replicaCount {
 			// if the ordinal of the pod is within the range of the current number of replicas,
 			// insert it at the indirection of its ordinal
 			replicas[ord] = pods[i]
@@ -376,7 +382,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 		if toDelete {
 			ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingFailedPod",
 				"Recreating failed Pod %s", replicas[i].Name)
-		} else if isOutdatedPending(replicas[i], updateRevision) && !stayCurrentSideOfPartition(set, getOrdinal(replicas[i])) {
+		} else if isOutdatedPending(replicas[i], updateRevision) && !stayCurrentSideOfPartition(set, i, highestCurrentOrdinal) {
 			toDelete = isSafeToDeletePendingPod(replicas[i])
 			wasPending = true
 			if toDelete {

@@ -34,8 +34,6 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	clientset "k8s.io/client-go/kubernetes"
 	watchtools "k8s.io/client-go/tools/watch"
-	"k8s.io/kubernetes/pkg/apis/apps"
-	"k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
@@ -870,85 +868,118 @@ var _ = SIGDescribe("StatefulSet", func() {
 		})
 	})
 
-	framework.KubeDescribe("When stuck with invalid image", func() {
+	framework.KubeDescribe("When stuck Pending with non-existant image", func() {
 		ssName := "ss"
 		labels := map[string]string{
 			"foo": "bar",
 			"baz": "blah",
 		}
 		headlessSvcName := "test"
-		var ss *apps.StatefulSet
+		var ss *appsv1.StatefulSet
 
 		ginkgo.BeforeEach(func() {
 			ginkgo.By("Creating service " + headlessSvcName + " in namespace " + ns)
-			headlessService := framework.CreateServiceSpec(headlessSvcName, "", true, labels)
-			_, err := c.CoreV1().Services(ns).Create(headlessService)
+			headlessService := e2eservice.CreateServiceSpec(headlessSvcName, "", true, labels)
+			_, err := c.CoreV1().Services(ns).Create(context.TODO(), headlessService, metav1.CreateOptions{})
 			framework.ExpectNoError(err)
+
+			ss = e2esset.NewStatefulSet(ssName, ns, headlessSvcName, 1, nil, nil, labels)
+			setHTTPProbe(ss)
 		})
 
 		ginkgo.AfterEach(func() {
 			if ginkgo.CurrentGinkgoTestDescription().Failed {
 				framework.DumpDebugInfo(c, ns)
 			}
-			e2elog.Logf("Deleting all statefulset in ns %v", ns)
-			framework.DeleteAllStatefulSets(c, ns)
+			framework.Logf("Deleting all statefulset in ns %v", ns)
+			e2esset.DeleteAllStatefulSets(c, ns)
 		})
 
 		ginkgo.It("should redeploy after update", func() {
-			ss = &apps.StatefulSet{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "StatefulSet",
-					APIVersion: "apps/v1",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      ssName,
-					Namespace: ns,
-				},
-				Spec: apps.StatefulSetSpec{
-					Selector: &metav1.LabelSelector{
-						MatchLabels: labels,
-					},
-					Template: core.PodTemplateSpec{
-						ObjectMeta: metav1.ObjectMeta{
-							Labels:      labels,
-							Annotations: map[string]string{},
-						},
-						Spec: v1.PodSpec{
-							Containers: []v1.Container{
-								{
-									Name:    "busybox",
-									Image:   "busybox:never.exists",
-									Command: []string{"sh", "-c"},
-									Args:    []string{`while true; do echo "hello world"; sleep 5; done`},
-								},
-							},
-						},
-					},
-					ServiceName: headlessSvcName,
+			fmt.Printf("ss-value0: %+v\n", ss)
+			// fmt.Printf("ss-value1: %+v\n", ss.Spec.Template)
+			// fmt.Printf("ss-value2: %+v\n", ss.Spec.Template.Spec.Containers)
+			originalImage := ss.Spec.Template.Spec.Containers[0].Image
+			ss.Spec.Template.Spec.Containers[0].Image = "busybox:never.exists"
+
+			ginkgo.By("Creating broken statefulset " + ssName + " in namespace " + ns)
+			e2epv.SkipIfNoDefaultStorageClass(c)
+
+			_, err := c.AppsV1().StatefulSets(ns).Create(context.TODO(), ss, metav1.CreateOptions{})
+			framework.ExpectNoError(err)
+
+			ss, pods := waitForPodNotReady(c, ss, "ss-0")
+			fmt.Printf("\n################\npods: %+v\n#####################\n", pods)
+
+			ginkgo.By("Updating stateful set template: fixing image spec to " + originalImage)
+			ss, err = updateStatefulSetWithRetries(c, ns, ss.Name, func(update *appsv1.StatefulSet) {
+				update.Spec.Template.Spec.Containers[0].Image = originalImage
+				fmt.Println("##### Updating...")
+			})
+			framework.ExpectNoError(err)
+			e2esset.WaitForRunning(c, 1, 1, ss)
+		})
+	})
+
+	framework.KubeDescribe("When stuck Pending with failing init container", func() {
+		ssName := "ss"
+		labels := map[string]string{
+			"foo": "bar",
+			"baz": "blah",
+		}
+		headlessSvcName := "test"
+		var ss *appsv1.StatefulSet
+
+		ginkgo.BeforeEach(func() {
+			ginkgo.By("Creating service " + headlessSvcName + " in namespace " + ns)
+			headlessService := e2eservice.CreateServiceSpec(headlessSvcName, "", true, labels)
+			_, err := c.CoreV1().Services(ns).Create(context.TODO(), headlessService, metav1.CreateOptions{})
+			framework.ExpectNoError(err)
+
+			ss = e2esset.NewStatefulSet(ssName, ns, headlessSvcName, 1, nil, nil, labels)
+			setHTTPProbe(ss)
+		})
+
+		ginkgo.AfterEach(func() {
+			if ginkgo.CurrentGinkgoTestDescription().Failed {
+				framework.DumpDebugInfo(c, ns)
+			}
+			framework.Logf("Deleting all statefulset in ns %v", ns)
+			e2esset.DeleteAllStatefulSets(c, ns)
+		})
+
+		ginkgo.It("is blocked from update but prompts for manual help", func() {
+			fmt.Printf("ss-value0: %+v\n", ss)
+			// fmt.Printf("ss-value1: %+v\n", ss.Spec.Template)
+			// fmt.Printf("ss-value2: %+v\n", ss.Spec.Template.Spec.Containers)
+			originalImage := ss.Spec.Template.Spec.Containers[0].Image
+			ss.Spec.Template.Spec.InitContainers = []v1.Container{
+				{
+					Name:    "busybox",
+					Image:   "busybox:1.17",
+					Command: []string{"sh", "-c"},
+					Args:    []string{"sleep 2; false"},
 				},
 			}
 
-			ginkgo.By("Creating statefulset " + ssName + " in namespace " + ns)
-			framework.SkipIfNoDefaultStorageClass(c)
-			*(ss.Spec.Replicas) = 1
-			sst := framework.NewStatefulSetTester(c)
+			ginkgo.By("Creating failing statefulset " + ssName + " in namespace " + ns)
+			e2epv.SkipIfNoDefaultStorageClass(c)
 
-			_, err := c.AppsV1().StatefulSets(ns).Create(ss)
+			_, err := c.AppsV1().StatefulSets(ns).Create(context.TODO(), ss, metav1.CreateOptions{})
 			framework.ExpectNoError(err)
 
-			ginkgo.By(fmt.Sprintf("Updating stateful set template: fix image spec"))
-			ss, err = framework.UpdateStatefulSetWithRetries(c, ns, ss.Name, func(update *apps.StatefulSet) {
-				update.Spec.Template.Spec.Containers = []v1.Container{
-					{
-						Name:    "busybox",
-						Image:   "busybox",
-						Command: []string{"sh", "-c"},
-						Args:    []string{`while true; do echo "hello world"; sleep 5; done`},
-					},
-				}
+			// TODO: Wait for restartCount > 0
+			ss, pods := waitForPodNotReady(c, ss, "ss-0")
+			fmt.Printf("\n################\npods: %+v\n#####################\n", pods)
+
+			ginkgo.By("Updating stateful set template: fixing image spec to " + originalImage)
+			ss, err = updateStatefulSetWithRetries(c, ns, ss.Name, func(update *appsv1.StatefulSet) {
+				update.Spec.Template.Spec.InitContainers[0].Args = []string{"sleep 2; true"},
+					fmt.Println("##### Updating...")
 			})
 			framework.ExpectNoError(err)
-			sst.WaitForRunningAndReady(1, ss)
+			// TODO: Wait for blocked status on ss
+			e2esset.WaitForRunning(c, 1, 1, ss)
 		})
 	})
 
